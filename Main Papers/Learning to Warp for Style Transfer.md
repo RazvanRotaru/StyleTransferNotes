@@ -10,7 +10,7 @@
 
 - neural network that, uniquely, learns a mapping from a 4D array of inter-feature distances to a non-parametric 2D warp field.
 - he system is generic in not being limited by semantic class, a single learned model is sufficient
-- combines results of [[Learning to Warp for Style Transfer#^3f9062|42]] - high speed - and [[Learning to Warp for Style Transfer#^4e85dc|55]] - non parametric warping -
+- combines results of [[Geometric Style Transfer]] - high speed - and [[Deformable Style Transfer]] - non parametric warping -
 - extends the normal [[Neural Style Transfer | NST]] paradigm
 
 ---
@@ -29,21 +29,21 @@
 
 Inputs:
 
-- a content image `Ic`
-- a geometric transfer guide image `Ig`
-- a texture transfer guide image `It`
+- a content image $I_c$
+- a geometric transfer guide image $I_g$
+- a texture transfer guide image $I_t$
 
 2 **independent** modules:
 
 	
 ![[Pasted image 20211019191957.png]]
-`Io =R(D(Ig,Ic),It)`
+$$I_o = \mathcal R(\mathcal D(I_g,I_c),I_t)$$
 
 - **[[#Geometric Warping|geometric warping]]** module $\mathcal D$ ^d23ae9
-	- *computes a non-parametric vector field to warp the content image `Ic` to **match the geometric style** in the exemplar `Ig`*
+	- *computes a non-parametric vector field to warp the content image $I_c$ to **match the geometric style** in the exemplar $I_g$*
 
-- **texture rendering** module $\mathcal R$
-	- *uses the texture exemplar `It` to **produce the final result** `Io`*
+- [[#Texture Style|texture rendering]] module $\mathcal R$
+	- *uses the texture exemplar $I_t$ to **produce the final result** $I_o$*
 
 ---
 
@@ -52,11 +52,11 @@ Inputs:
 ![[Pasted image 20211019192629.png]]
 
 
-To reach [[Learning to Warp for Style Transfer#^d23ae9 | geometric wraping]], a [[Neural Networks | neural network]] is trained to be able to infer a 2D warp field $w$ given a 4D scalar funtion $M$ that measures feature similarity.
+To reach ***Geometric Warping***, a [[Neural Networks | neural network]] is trained to be able to infer a 2D warp field $w$ given a 4D scalar funtion $M$ that measures feature similarity.
 
 
 ###### Components
-1. [[#Feature Extraction]] to get features $F_c$ from `Ic` and $F_g$ from `Ig`
+1. [[#Feature Extraction]] to get features $F_c$ from $I_c$ and $F_g$ from $I_g$
 2. [[#Feature Correlation]] to measure similarity $M(F_c, F_g)$
 3. Training the [[#Warp Network]] to output the function $f$ such that $w=f(M)$
 	- once learned, $f$ can be used on any inputs
@@ -142,6 +142,90 @@ ___
 
 ---
 
+##### Texture Rendering
+
+This module accepts **warped image** $I_w$ and **texture exemplar** $I_t$ as input, to yield an **output image**: $Io = \mathcal R(Iw,It)$.
+
+This is an optimization task to **minimize** both [[#Content Distance|content loss]] $\Delta C(I_o,I_w)$, and [[#Texture Style Distance|texture style loss]] $\Delta S(I_o,I_t)$,  both of which depend on feature maps from a neural network trained for object detection.
+- **coarse-to-fine strategy** that preferentially transfers texture with *increasing details into different areas* of the output image
+	- *startegy adopted in many texture-transfer solutions*
+
+- follows the parametric modeling strategy proposed by [[Image Style Transfer Using Convolutional Neural Networks|Gatsy et al.]] to represent **texture style** and **content** in the domain of a [[Convolutional Neural Networks|CNN]].
+	-	specifically, a Gram-based representation, which is the **correlation between filter responses in different layers of [[VGG Network|VGG]]**, to model texture
+
+---
+
+1. Denote the **feature activation map** of input image $I$ at layer $l$ of [[VGG Network|VGG]] by $F^l(I)$.
+2. This map is of size $W_l$ × $H_l$, and each feature element is a vector of $C_l$ components corresponding to the number of channels. 
+3. Then the texture style of image $I$ at layer $l$ can be represented by the Gram matrix as: $G(F^l(I))=[F^l(I)]^⊺[F^l(I)]$
+		where
+			-  $[F^l(I)]$ is the **reformatted feature map** such that each feature is a **row vector** in a matrix of $W_l$ × $H_l$ columns
+			-  and $G$ is a $C_l$ ×$C_l$ symmetric matrix.
+
+---
+
+###### Texture Style Distance
+
+The ***texture style distance*** is specified to be:
+$$ \Delta _S(I_o, I_t) = \sum _{I \in I_t} {||G(F^l(I_o)) - G(F^l(I_t))||^2} $$	
+where $l_t$ is the **set of selected layers** for texture style representation
+	
+---
+
+###### Content Distance
+
+The ***content distance*** is specified to be the [[L2 Normalization|L2-norm]] between feature maps:  
+
+$$ \Delta _C(I_o, I_w) = ||F^{l_c}(I_o) - F^{l_c}(I_w) ||^2 $$
+where $l_c$ is the **selected layer** for content representation.
+
+---
+
+
+***Texture style transfer*** is then instantiated as the following optimization problem:  
+
+$$ I_o = argmin _I [\alpha \Delta _S (I, I_t) + \beta \Delta _C (I, I_w)]$$
+where $\alpha$ and $\beta$ are the **balancing weights** used to control the extent of stylized effects.
+
+This paper uses ***Multi-scale Strategy*** by feeding images at different sizes to a **Gaussian pyramid**, where each layer $p$ is formed by **blurring** and **downsampling** *the previous layer*.
+
+Hence, the previous equation becomes:
+
+$$ I_o = argmin _I \sum _{p = 0}^{P-1} {\alpha \Delta _S (I^p, I^p_w) + \beta \Delta _C (I^p, I^p_t)}$$
+where $P$ is the number of scales (4).
+
+---
+
+![[Pasted image 20211020011229.png]]
+
+Higher pyramids level will compensate and strengthen regions that are not well covered by lower levels (typically where an image region has been stretched). 
+On the other hand, low-levels fill in the small-scale details that the higher levels tend to blur (where regions have been compressed).
+
+
+---
+
+### Implementation details
+
+The [[#Geometric Warping|geometric warping network]] is trained with images from *PF-PASCAL* and *MS COCO*.
+- all images are resized to 256×256. 
+- batch size 16
+- learning rate 1×10−5. 
+
+Training takes about two hours on a single GPU.
+
+After warping, empty background regions are inpainted. 
+
+For the texture rendering module
+- compute content distance at **layer relu4 2** 
+- texture distance at layers 
+	- relu1 1
+	- relu2 1
+	- relu3 1
+	- relu4 1
+	- relu5 1
+
+---
+
 ##### SoA comparrison 
 
 This paper provides an ***NST architecture*** that performs a *geometric warp* and is uniquely characterized by the possession of all of the following properties:
@@ -151,7 +235,23 @@ This paper provides an ***NST architecture*** that performs a *geometric warp* a
 - unlike [[Learning to Warp for Style Transfer#^3f9062|Liu et al.]] who are limited to parametric warp fields, a non-parametric warp is produced;
 - unlike every other NST algorithm other than [[Learning to Warp for Style Transfer#^3f9062|Liu et al.]], the use of two images to specify style is supported, which adds versatility to image creation that is absent in other NST algorithms.
 
+---
 
+### Limitations
+
+This approach is ***limited*** by its **assumptions** in terms of both **geometric and texture transfer**. 
+
+*The limitations on texture transfer are shared with many other NST algorithms.*
+
+**Regarding geometric transfer**:
+The ***key limiting assumption*** is that the **content image** and **geometric exemplar** each exhibit local discriminative features that can be **mapped 1-1**.
+
+
+![[Pasted image 20211020012017.png]]
+The **mapping struggles** when the **geometric exemplar has too few features**, or has **too many nearly identical features**.
+*Another interesting failure case occurs when the topology of the shapes involved differ.*
+
+***All of these are fundamental in that they will require changes to this algorithm to address.***
 
 ---
 
